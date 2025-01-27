@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DeepSeek Chat Prevent Enter Submit (No DeepThink Trigger)
 // @namespace    http://yournamespace.com
-// @version      1.5
+// @version      1.6
 // @description  Prevent IME Enter submit, Prevent DeepThink (R1) button trigger on Enter for DeepSeek Chat
 // @author       You
 // @match        https://chat.deepseek.com/*
@@ -13,48 +13,82 @@
 
     const inputSelector = '#chat-input.c92459f0';
     const sendButtonSelector = '.ds-button[role="button"]:has(.ds-icon > svg[width="20"][height="20"])';
-    const deepThinkButtonSelector = '.ds-button[role="button"]:has(.ds-icon > svg[width="20"][height="20"]):has(span.ad0c98fd:contains("DeepThink (R1)"))'; // DeepThink (R1) ボタンのセレクタ
+    const deepThinkButtonSelector = '.ds-button[role="button"]:has(.ds-icon > svg[width="20"][height="20"]):has(span.ad0c98fd:contains("DeepThink (R1)"))';
+
+    let isComposing = false;
 
     function isIMECompositionActive(event) {
-        return event.isComposing;
+        return isComposing || event.isComposing || event.keyCode === 229;
+    }
+
+    function handleCompositionStart(event) {
+        isComposing = true;
+    }
+
+    function handleCompositionEnd(event) {
+        isComposing = false;
     }
 
     function handleKeyDown(event) {
         if (event.key === 'Enter') {
+            // IMEの状態をより厳密にチェック
             if (isIMECompositionActive(event)) {
-                // IME変換中の場合：送信をキャンセル
                 event.preventDefault();
                 event.stopPropagation();
-            } else {
-                // IME変換中でない場合：送信処理を実行 (DeepThink (R1) ボタン誤作動対策)
-                const sendButton = document.querySelector(sendButtonSelector);
-                const deepThinkButton = document.querySelector(deepThinkButtonSelector); // DeepThink (R1) ボタン要素を取得
+                return false;
+            }
 
-                if (sendButton && deepThinkButton) {
-                    deepThinkButton.disabled = true; // **送信前に DeepThink (R1) ボタンを一時的に無効化**
-                    sendButton.click(); // 送信ボタンをクリック
-                    setTimeout(() => {
-                        deepThinkButton.disabled = false; // **送信後に DeepThink (R1) ボタンを有効に戻す (少し遅延させる)**
-                    }, 100); // 100ms程度の遅延
-                } else if (sendButton) { // DeepThink (R1) ボタンが見つからない場合でも、送信処理は実行
-                    sendButton.click();
+            // 通常のEnter処理
+            const sendButton = document.querySelector(sendButtonSelector);
+            const deepThinkButton = document.querySelector(deepThinkButtonSelector);
+
+            if (sendButton && !event.isComposing) {
+                if (deepThinkButton) {
+                    deepThinkButton.disabled = true;
                 }
+
+                // 少し遅延を入れて送信
+                setTimeout(() => {
+                    sendButton.click();
+                    if (deepThinkButton) {
+                        setTimeout(() => {
+                            deepThinkButton.disabled = false;
+                        }, 100);
+                    }
+                }, 50);
+
+                event.preventDefault();
+                event.stopPropagation();
             }
         }
     }
 
     function setupEnterKeyPreventer(inputElement) {
-        if (!inputElement) {
+        if (!inputElement || inputElement.hasAttribute('data-enter-handler')) {
             return;
         }
-        inputElement.addEventListener('keydown', handleKeyDown, true); // キャプチャフェーズ
+
+        // 既存のイベントリスナーを削除（安全のため）
+        removeEnterKeyPreventer(inputElement);
+
+        // 新しいイベントリスナーを追加
+        inputElement.addEventListener('keydown', handleKeyDown, true);
+        inputElement.addEventListener('compositionstart', handleCompositionStart, false);
+        inputElement.addEventListener('compositionend', handleCompositionEnd, false);
+
+        // ハンドラーが設定されたことをマーク
+        inputElement.setAttribute('data-enter-handler', 'true');
     }
 
     function removeEnterKeyPreventer(inputElement) {
         if (!inputElement) {
             return;
         }
+
         inputElement.removeEventListener('keydown', handleKeyDown, true);
+        inputElement.removeEventListener('compositionstart', handleCompositionStart, false);
+        inputElement.removeEventListener('compositionend', handleCompositionEnd, false);
+        inputElement.removeAttribute('data-enter-handler');
     }
 
     function initializeScript() {
@@ -63,22 +97,23 @@
             setupEnterKeyPreventer(inputElement);
 
             const observer = new MutationObserver(mutations => {
-                mutations.forEach(mutation => {
-                    if (mutation.type === 'attributes' || mutation.type === 'childList') {
-                        removeEnterKeyPreventer(inputElement);
-                        setupEnterKeyPreventer(inputElement);
-                    }
-                });
+                const inputElement = document.querySelector(inputSelector);
+                if (inputElement && !inputElement.hasAttribute('data-enter-handler')) {
+                    setupEnterKeyPreventer(inputElement);
+                }
             });
 
-            const targetNode = document.querySelector('body');
-            const config = { attributes: true, childList: true, subtree: true };
-            observer.observe(targetNode, config);
+            observer.observe(document.body, {
+                childList: true,
+                subtree: true
+            });
         }
     }
 
-    window.addEventListener('load', function() {
+    // ページ読み込み完了時に初期化
+    if (document.readyState === 'loading') {
+        window.addEventListener('load', () => setTimeout(initializeScript, 1000));
+    } else {
         setTimeout(initializeScript, 1000);
-    });
-
+    }
 })();
